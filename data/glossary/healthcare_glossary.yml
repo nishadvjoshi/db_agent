@@ -1,0 +1,59 @@
+version: 1
+concepts:
+  caremap:
+    description: >
+      Caremap often represents a care plan / pathway / program enrollment.
+      In schemas it commonly appears as a header (care plan master) plus child tables for
+      steps/tasks/activities. It usually links to Member/Patient and may link to diagnosis codes (ICD9/ICD10).
+    synonyms: ["care plan", "carepath", "pathway", "program", "enrollment", "caremap", "care_map", "careplan"]
+    table_hints:
+      - "caremap"
+      - "care_plan"
+      - "careplan"
+      - "pathway"
+      - "program"
+    column_hints:
+      member: ["member_id", "patient_id", "person_id", "mrn"]
+      status: ["status", "state", "is_active", "active_flag"]
+      start_date: ["start_date", "effective_date", "begin_date", "created_date"]
+      end_date: ["end_date", "termination_date", "closed_date"]
+      diagnosis_code: ["icd9", "icd10", "dx_code", "diagnosis_code"]
+    structure_patterns:
+      - header_detail
+  appointment:
+    description: >
+      Appointment represents a scheduled future (or historical) visit/encounter.
+      Sometimes appointments are stored as Encounter/Visit records with a scheduled_start datetime.
+    synonyms: ["appointment", "appt", "schedule", "scheduled visit", "encounter", "visit"]
+    table_hints: ["appointment", "appt", "schedule", "encounter", "visit"]
+    column_hints:
+      member: ["member_id", "patient_id", "person_id"]
+      datetime: ["appointment_datetime", "appt_datetime", "scheduled_start", "start_dt", "visit_dt", "encounter_dt"]
+      status: ["status", "appt_status", "encounter_status", "state"]
+  member:
+    description: >
+      Member/Patient/Person is a core entity used for demographics and identifiers.
+    synonyms: ["member", "patient", "person", "enrollee"]
+    table_hints: ["member", "patient", "person", "enrollee"]
+    column_hints:
+      id: ["member_id", "patient_id", "person_id", "mrn"]
+      name: ["name", "full_name", "first_name", "last_name"]
+  allergy:
+    description: >
+      Allergy records may be a bridge between Member and allergen/substance reference,
+      or a fact-like clinical event (onset date, severity, reaction, status).
+    synonyms: ["allergy", "allergen", "drug allergy", "food allergy"]
+    table_hints: ["allergy", "allergen"]
+    column_hints:
+      member: ["member_id", "patient_id", "person_id"]
+      status: ["status", "is_active", "active_flag"]
+      severity: ["severity", "reaction_severity"]
+      onset_date: ["onset_date", "recorded_date", "created_date"]
+  icd9:
+    description: >
+      ICD9 is a diagnosis code reference set used for conditions/diagnoses.
+    synonyms: ["icd9", "diagnosis", "dx code", "icd-9"]
+    table_hints: ["icd9", "icd_9", "diagnosis_code"]
+    column_hints:
+      code: ["icd9_code", "code", "dx_code"]
+      description: ["description", "desc", "long_description", "short_description"]

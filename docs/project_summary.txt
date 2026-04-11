@@ -1,0 +1,8 @@
+Here are the main features of the MySQL Context AI Agent:
+
+1. **Centralized Data Catalog**: It scans any target database and builds a rich, structured metadata schema natively inside a `ai_agent_catalog` MySQL database. No external APIs or file-based `sqlite` databases are needed.
+2. **Context-Driven Vector Prompts**: Converts databases into high-dimensional semantic vectors using `nomic-embed-text` and stores them in ChromaDB. Uses natural language directly (e.g., "how many appointments") to accurately draft SQL queries via Cosine Similarity searching.
+3. **Safe Read-Only Guardrails**: It enforces SQL safety measures by guaranteeing that all generated queries strictly request views (`SELECT`) without the ability to edit (like `DELETE` or `DROP`), and appends row caps natively.
+4. **Contextual Data Profiler**: Leverages advanced NLP (Presidio) to scan physical string records asynchronously. If it identifies data as Personally Identifiable Information (PHI), it tags it as `PHI_PERSON`, `PHI_URL`, etc., and the execution engine aggressively prevents `SELECT *` leaks on these columns.
+5. **Self-Learning Concept System**: Through user interactions (e.g. asking for "Security Audits"), it deduces unknown business contexts by referencing available tables over a local Language Model—caching structures without static YAML inputs!
+6. **Conversational Edge UI**: Provides a ChatGPT-style Streamlit web dashboard. Instantly visualizes complex SQL payloads as native Panda dataframes, allowing both novice users and data engineers to trace Agent confidence and reasoning scores cleanly.
