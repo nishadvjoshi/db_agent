@@ -57,101 +57,39 @@ def _fetchall_dict(cur) -> List[Dict[str, Any]]:
     return out
 
 
-def crawl_mysql(include_schemas: Optional[Sequence[str]] = None, exclude_schemas: Optional[Sequence[str]] = None) -> str:
-    """Crawl MySQL metadata and persist a catalog via CatalogStore.
-
-    This function always aliases columns in SQL to **lowercase** names (schema_name, table_name, ...)
-    so downstream code never breaks due to driver-dependent casing.
-    """
+def crawl_database(include_schemas: Optional[Sequence[str]] = None, exclude_schemas: Optional[Sequence[str]] = None) -> str:
+    """Crawl Target Database metadata and persist a catalog via CatalogStore."""
 
     from app.catalog_store import CatalogStore  # local import to avoid circular deps
+    from app.config import settings
+    from app.adapters.factory import get_adapter
 
     run_id = str(uuid.uuid4())
     filters = CrawlFilters.from_args(include_schemas, exclude_schemas)
 
-    conn = get_mysql_conn()
-    cur = conn.cursor(dictionary=True)
+    target_params = {
+        "host": settings.target_db_host,
+        "port": settings.target_db_port,
+        "user": settings.target_db_user,
+        "password": settings.target_db_password,
+        "database": settings.target_db_name,
+    }
+    # For demo simplicity we remove empty properties that pyodbc/psycopg2 might complain about
+    target_params = {k: v for k, v in target_params.items() if v}
+    
+    adapter = get_adapter(settings.target_db_type, target_params)
 
     # 1) Schemas
-    cur.execute(
-        """
-        SELECT schema_name AS schema_name
-        FROM information_schema.schemata
-        ORDER BY schema_name
-        """.strip()
-    )
-    schema_rows = _fetchall_dict(cur)
-    schemas = [r.get("schema_name") for r in schema_rows if isinstance(r.get("schema_name"), str)]
-    schemas = [s for s in schemas if filters.allow_schema(s)]
+    all_schemas = adapter.get_schemas(filters.include_schemas, filters.exclude_schemas)
 
     # 2) Tables
-    table_rows: List[Dict[str, Any]] = []
-    if schemas:
-        ph = ",".join(["%s"] * len(schemas))
-        cur.execute(
-            f"""
-            SELECT table_schema AS schema_name, table_name AS table_name
-            FROM information_schema.tables
-            WHERE table_type = 'BASE TABLE'
-              AND table_schema IN ({ph})
-            ORDER BY table_schema, table_name
-            """.strip(),
-            schemas,
-        )
-        table_rows = _fetchall_dict(cur)
+    table_rows = adapter.get_tables(all_schemas)
 
     # 3) Columns
-    column_rows: List[Dict[str, Any]] = []
-    if schemas:
-        ph = ",".join(["%s"] * len(schemas))
-        cur.execute(
-            f"""
-            SELECT
-              table_schema AS schema_name,
-              table_name AS table_name,
-              column_name AS column_name,
-              data_type AS data_type,
-              column_type AS column_type,
-              is_nullable AS is_nullable,
-              column_key AS column_key,
-              extra AS extra,
-              column_default AS column_default,
-              column_comment AS column_comment,
-              ordinal_position AS ordinal_position
-            FROM information_schema.columns
-            WHERE table_schema IN ({ph})
-            ORDER BY table_schema, table_name, ordinal_position
-            """.strip(),
-            schemas,
-        )
-        column_rows = _fetchall_dict(cur)
+    column_rows = adapter.get_columns(all_schemas)
 
     # 4) Foreign keys -> edges
-    edge_rows: List[Dict[str, Any]] = []
-    if schemas:
-        ph = ",".join(["%s"] * len(schemas))
-        cur.execute(
-            f"""
-            SELECT
-              kcu.table_schema AS from_schema,
-              kcu.table_name AS from_table,
-              kcu.column_name AS from_column,
-              kcu.referenced_table_schema AS to_schema,
-              kcu.referenced_table_name AS to_table,
-              kcu.referenced_column_name AS to_column,
-              kcu.constraint_name AS constraint_name
-            FROM information_schema.key_column_usage kcu
-            WHERE kcu.referenced_table_name IS NOT NULL
-              AND kcu.table_schema IN ({ph})
-              AND kcu.referenced_table_schema IN ({ph})
-            ORDER BY kcu.table_schema, kcu.table_name, kcu.constraint_name, kcu.ordinal_position
-            """.strip(),
-            schemas + schemas,
-        )
-        edge_rows = _fetchall_dict(cur)
-
-    cur.close()
-    conn.close()
+    edge_rows = adapter.get_foreign_keys(all_schemas)
 
     # Build canonical catalog JSON
     tables_by_schema: Dict[str, List[str]] = {}
@@ -183,7 +121,7 @@ def crawl_mysql(include_schemas: Optional[Sequence[str]] = None, exclude_schemas
         )
 
     catalog_schemas: List[Dict[str, Any]] = []
-    for s in schemas:
+    for s in all_schemas:
         schema_tables: List[Dict[str, Any]] = []
         for t in tables_by_schema.get(s, []):
             schema_tables.append({"name": t, "columns": cols_by_table.get((s, t), [])})

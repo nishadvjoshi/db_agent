@@ -17,13 +17,13 @@ def classify_table(run_id: str, schema: str, table: str) -> dict:
     cur = con.cursor()
     try:
         cur.execute(
-            """SELECT data_type, column_name FROM `columns`
+            """SELECT data_type, column_name FROM `catalog_columns`
                WHERE run_id=%s AND schema_name=%s AND table_name=%s""",
             (run_id, schema, table),
         )
         cols = cur.fetchall()
         cur.execute(
-            """SELECT row_count FROM `tables`
+            """SELECT row_count FROM `catalog_tables`
                WHERE run_id=%s AND schema_name=%s AND table_name=%s""",
             (run_id, schema, table),
         )

@@ -19,6 +19,14 @@ class Settings:
         self.mysql_password = mysql.get("password", "")
         self.mysql_database = mysql.get("database", "")
 
+        target = cfg.get("target_db", {}) or {}
+        self.target_db_type = target.get("type", "mysql")
+        self.target_db_host = target.get("host", self.mysql_host)
+        self.target_db_port = int(target.get("port", self.mysql_port))
+        self.target_db_user = target.get("user", self.mysql_user)
+        self.target_db_password = target.get("password", self.mysql_password)
+        self.target_db_name = target.get("database", self.mysql_database)
+
         catalog = cfg.get("catalog", {}) or {}
         self.catalog_schema = catalog.get("schema", "ai_agent_catalog")
 

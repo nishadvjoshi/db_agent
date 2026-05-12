@@ -37,6 +37,7 @@ class Plan:
     confidence: float
     intent: str
     action: str
+    chain_of_thought: Optional[str] = None
     sql: Optional[str] = None
     answer: Optional[str] = None
     used_tables: Optional[List[str]] = None
@@ -54,10 +55,16 @@ def build_catalog_context(run_id: str, catalog: Dict[str, Any], question: str, *
 
     candidates = retrieve_candidates(run_id, question, max_tables=top_k)
     schema_names = [s.get("name") for s in (catalog.get("schemas") or []) if s.get("name")]
+    
+    # Inject few-shot complex SQL examples to guide the LLM
+    from app.few_shot import get_few_shot_examples
+    examples = get_few_shot_examples()
+
     return {
         "schemas": schema_names,
         "candidates": candidates,
         "edges": catalog.get("edges") or [],
+        "few_shot_examples": examples,
     }
 
 
@@ -66,6 +73,7 @@ def plan_request(
     question: str,
     catalog_ctx: Dict[str, Any],
     glossary_ctx: Optional[Dict[str, Any]] = None,
+    previous_errors: Optional[List[str]] = None,
 ) -> Plan:
     """LLM-first planner.
 
@@ -83,6 +91,7 @@ def plan_request(
                 question=question,
                 catalog_ctx=catalog_ctx,
                 glossary_ctx=glossary_ctx,
+                previous_errors=previous_errors,
             )
             plan = _normalize_plan(raw, provider_used=provider)
 
@@ -101,8 +110,8 @@ def plan_request(
                 if bad_tables:
                     raise ValueError(f"Unknown tables referenced: {bad_tables}")
 
-            # Confidence threshold (strict for local to avoid random SQL)
-            threshold = 0.60 if provider in ("local", "ollama") else 0.50
+            # Confidence threshold
+            threshold = 0.50
             if plan.needs_clarification or plan.confidence >= threshold:
                 return plan
 
@@ -139,6 +148,7 @@ def _call_planner_llm(
     question: str,
     catalog_ctx: Dict[str, Any],
     glossary_ctx: Optional[Dict[str, Any]],
+    previous_errors: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     client = get_client(provider)
 
@@ -151,9 +161,11 @@ def _call_planner_llm(
         f"You are a backend PLANNING agent for Augmented BI. Today's Date is {current_date} and current time is {current_time}. "
         "You must output ONLY valid JSON. "
         "Use database metadata (schemas/tables/columns/relationships) and healthcare glossary when helpful. "
+        "CRITICAL: Produce a 'chain_of_thought' mapping out the steps (Joins, CTEs) needed BEFORE drafting the SQL. "
         "CRITICAL PRIVACY RULE: Do NOT `SELECT` any columns in your SQL queries where the 'inferred_semantic_type' starts with 'PHI_'. You may use them in `WHERE` clauses for filtering context (e.g. filtering by date), but you cannot return their values. "
         "If the user explicitly asks to view 'PHI_' columns, you MUST refuse and set action='CLARIFY' with an explanation. "
         "If SQL is needed, output a READ-ONLY SELECT query with LIMIT 50. "
+        "If previous SQL executions failed, review the 'previous_errors' and fix the syntax or table references."
         "If the question is about metadata, answer directly without SQL. "
         "If unsure, set needs_clarification=true and ask ONE short clarification question."
     )
@@ -162,6 +174,7 @@ def _call_planner_llm(
         "question": question,
         "catalog": catalog_ctx,
         "glossary": glossary_ctx or {},
+        "previous_errors": previous_errors or [],
         "rules": {
             "sql": {
                 "read_only": True,
@@ -175,6 +188,7 @@ def _call_planner_llm(
             "confidence": "number 0..1",
             "intent": "string",
             "action": "SQL|ANSWER|CLARIFY",
+            "chain_of_thought": "string|null",
             "sql": "string|null",
             "answer": "string|null",
             "used_tables": "array[string]",
@@ -200,6 +214,7 @@ def _normalize_plan(raw: Dict[str, Any], *, provider_used: str) -> Plan:
     confidence = float(raw.get("confidence", 0.5) or 0.5)
     intent = str(raw.get("intent") or "UNKNOWN")
     action = str(raw.get("action") or "ANSWER").upper()
+    chain_of_thought = raw.get("chain_of_thought")
 
     sql = raw.get("sql")
     answer = raw.get("answer")
@@ -209,7 +224,12 @@ def _normalize_plan(raw: Dict[str, Any], *, provider_used: str) -> Plan:
     clarification_question = raw.get("clarification_question")
 
     if sql is not None:
-        sql = str(sql).strip() or None
+        sql = str(sql).strip()
+        if sql.startswith("```"):
+            lines = sql.split("\n")
+            if len(lines) > 1:
+                sql = "\n".join(lines[1:])
+        sql = sql.replace("```", "").strip() or None
     if answer is not None:
         answer = str(answer).strip() or None
 
@@ -229,6 +249,7 @@ def _normalize_plan(raw: Dict[str, Any], *, provider_used: str) -> Plan:
         confidence=max(0.0, min(1.0, confidence)),
         intent=intent,
         action=action,
+        chain_of_thought=chain_of_thought,
         sql=sql,
         answer=answer,
         used_tables=used_tables,

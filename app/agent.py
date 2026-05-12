@@ -58,7 +58,50 @@ def propose_sql(run_id: str, question: str, context: dict | None = None):
     # --- LLM-first ---
     try:
         catalog_ctx = build_catalog_context(run_id, catalog, question, top_k=6)
-        plan = plan_request(question=question, catalog_ctx=catalog_ctx, glossary_ctx=glossary)
+        
+        target_params = {
+            "host": settings.target_db_host,
+            "port": settings.target_db_port,
+            "user": settings.target_db_user,
+            "password": settings.target_db_password,
+            "database": settings.target_db_name,
+        }
+        target_params = {k: v for k, v in target_params.items() if v}
+        from app.adapters.factory import get_adapter
+        adapter = get_adapter(settings.target_db_type, target_params)
+
+        max_retries = 3
+        previous_errors = []
+        plan = None
+        
+        for attempt in range(max_retries):
+            plan = plan_request(
+                question=question, 
+                catalog_ctx=catalog_ctx, 
+                glossary_ctx=glossary,
+                previous_errors=previous_errors
+            )
+            
+            if plan.action == "SQL" and plan.sql:
+                try:
+                    # Dry-run validation
+                    if settings.target_db_type != "sqlserver":
+                        adapter.execute_query(f"EXPLAIN {plan.sql}")
+                    break # SQL is valid!
+                except Exception as db_err:
+                    err_msg = str(db_err)
+                    previous_errors.append(f"Attempt {attempt+1} generated invalid SQL: {plan.sql}\nDatabase Error: {err_msg}")
+                    continue
+            else:
+                if previous_errors and attempt > 0:
+                    if not plan.debug:
+                        plan.debug = {}
+                    plan.debug["error"] = f"Failed to auto-correct SQL. Internal error: {plan.debug.get('error', '')}"
+                break # Non-SQL action or empty SQL, just break
+
+        if not plan:
+            raise ValueError("All planner retries failed.")
+
         return {
             "question": question,
             "provider_used": plan.provider_used,
@@ -66,12 +109,14 @@ def propose_sql(run_id: str, question: str, context: dict | None = None):
             "detected_intent": plan.intent,
             "action": plan.action,
             "candidate_tables": catalog_ctx.get("candidates", []),
+            "chain_of_thought": plan.chain_of_thought,
             "sql": plan.sql,
             "answer": plan.answer,
             "used_tables": plan.used_tables or [],
             "needs_clarification": plan.needs_clarification,
             "clarification_question": plan.clarification_question,
             "debug": plan.debug or {},
+            "execution_errors": previous_errors,
         }
     except Exception as e:
         # --- Safe fallback: legacy heuristic ---

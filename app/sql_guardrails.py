@@ -16,8 +16,14 @@ def is_safe_sql(sql: str) -> tuple[bool, str]:
     for b in BLOCKLIST:
         if b in low:
             return False, f"Blocked token: {b.strip()}"
-    if not low.strip().startswith("select"):
-        return False, "Only SELECT statements are allowed"
+    import re
+    cleaned = re.sub(r'/\*.*?\*/', '', low, flags=re.DOTALL)
+    cleaned = re.sub(r'--.*?\n', '\n', cleaned)
+    cleaned = re.sub(r'^--.*$', '', cleaned) # If comment is the very last line with no newline
+    cleaned = cleaned.strip()
+
+    if not (cleaned.startswith("select") or cleaned.startswith("with")):
+        return False, f"Only SELECT or CTE (WITH) statements are allowed. Got: '{cleaned[:30]}...'"
     return True, "OK"
 
 def enforce_limit(sql: str, limit: int) -> str:
