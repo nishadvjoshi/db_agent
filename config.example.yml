@@ -1,0 +1,36 @@
+environment: dev
+
+mysql:
+  host: 127.0.0.1
+  port: 3306
+  user: root
+  password: your_db_password
+  database: physician_portal
+
+catalog:
+  schema: ai_agent_catalog
+
+agent:
+  sample_rows: 200
+  max_tables_return: 15
+  force_limit: 200
+
+profiling:
+  enabled: true
+
+llm:
+  prefer: openai         # local | openai | gemini
+  fallback_order: [gemini]
+
+  local:
+    provider: ollama
+    model: llama3.1:8b
+    base_url: http://localhost:11434
+
+  openai:
+    api_key: "YOUR_OPENAI_KEY_HERE"
+    model: "gpt-4o-mini"
+
+  gemini:
+    api_key: "YOUR_GEMINI_KEY_HERE"
+    model: "gemini-2.5-flash"

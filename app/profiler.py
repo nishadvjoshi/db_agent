@@ -44,6 +44,11 @@ SEMANTIC_RULES = [
 ]
 
 def infer_semantic_type(column_name: str, mysql_data_type: str, phi_detector: PHIDetector = None, samples: list = None) -> str:
+    # Ignore system audit dates from being aggressively tagged as PHI
+    system_dates = {"created_at", "updated_at", "created_date", "modified_date"}
+    if column_name.lower() in system_dates:
+        return "date"
+
     # Priority 1: NLP analysis of the actual data content using Presidio
     if phi_detector and samples:
         phi_type, confidence = phi_detector.detect_phi(samples)

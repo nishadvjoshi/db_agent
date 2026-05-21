@@ -1,18 +1,9 @@
 import os
 import chromadb
-import ollama
 from chromadb.utils import embedding_functions
 from app.config import settings
 from app.glossary import Glossary
 from app.catalog_store import CatalogStore
-
-class OllamaEmbeddingFunction(embedding_functions.EmbeddingFunction):
-    def __init__(self, model_name: str="nomic-embed-text"):
-        self.model_name = model_name
-
-    def __call__(self, input: list[str]) -> list[list[float]]:
-        resp = ollama.embed(model=self.model_name, input=input)
-        return resp["embeddings"]
 
 def retrieve_candidates(run_id: str, text: str, max_tables=None):
     max_tables = max_tables or settings.max_tables_return
@@ -27,11 +18,11 @@ def retrieve_candidates(run_id: str, text: str, max_tables=None):
     # Connect to local ChromaDB
     chroma_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "chroma_data"))
     client = chromadb.PersistentClient(path=chroma_path)
-    emb_fn = OllamaEmbeddingFunction(model_name="nomic-embed-text")
+    emb_fn = embedding_functions.DefaultEmbeddingFunction()
     try:
         collection = client.get_collection(name="catalog_embeddings", embedding_function=emb_fn)
-    except Exception:
-        print("Warning: Chroma collection not found. Run embed_catalog.py first!")
+    except Exception as e:
+        print(f"Warning: Chroma collection not found. Exception: {e}")
         return []
 
     # Query Top K vector matches

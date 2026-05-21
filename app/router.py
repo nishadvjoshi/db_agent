@@ -134,11 +134,11 @@ def plan_request(
 
 
 def _provider_order() -> List[str]:
-    order = ["local"]
-    if getattr(settings, "openai_api_key", None):
-        order.append("openai")
-    if getattr(settings, "gemini_api_key", None):
-        order.append("gemini")
+    preferred_llm = getattr(settings, "llm_prefer", "openai")
+    order = [preferred_llm]
+    for fallback in getattr(settings, "llm_fallback_order", ["gemini", "openai"]):
+        if fallback not in order:
+            order.append(fallback)
     return order
 
 
@@ -197,16 +197,25 @@ def _call_planner_llm(
         },
     }
 
-    resp = client.generate_json(
-        system=system,
-        user=json.dumps(payload, ensure_ascii=False),
-        schema=payload["output_schema"]
-    )
-    if isinstance(resp, dict):
-        return resp
-    if isinstance(resp, str):
-        return json.loads(_extract_json(resp))
-    raise ValueError(f"Unexpected LLM response type: {type(resp)}")
+    import time
+    for attempt in range(3):
+        try:
+            resp = client.generate_json(
+                system=system,
+                user=json.dumps(payload, ensure_ascii=False),
+                schema=payload["output_schema"]
+            )
+            if isinstance(resp, dict):
+                return resp
+            if isinstance(resp, str):
+                return json.loads(_extract_json(resp))
+            raise ValueError(f"Unexpected LLM response type: {type(resp)}")
+        except Exception as e:
+            if "429" in str(e) and attempt < 2:
+                print(f"Provider {provider} rate limited in Agent Chat. Waiting 10s...")
+                time.sleep(10)
+                continue
+            raise
 
 
 def _normalize_plan(raw: Dict[str, Any], *, provider_used: str) -> Plan:

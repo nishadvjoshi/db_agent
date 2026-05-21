@@ -57,12 +57,11 @@ class Glossary:
                 
         tables_str = "\n".join(available_tables)
         
-        # 3. Prompt LLM
-        client_type = "local"
-        if hasattr(settings, "llm"):
-            client_type = settings.llm.get("prefer", "local")
-            
-        client = get_client(client_type)
+        preferred_llm = getattr(settings, "llm_prefer", "openai")
+        order = [preferred_llm]
+        for fallback in getattr(settings, "llm_fallback_order", ["gemini", "openai"]):
+            if fallback not in order:
+                order.append(fallback)
         
         system = (
             "You are a Senior Data Architect AI. Your job is to learn the definition of the user's business concept, "
@@ -83,27 +82,39 @@ class Glossary:
             }
         }
         
-        try:
-            resp = client.generate_json(system=system, user=f"Learn concept: {concept}", schema=schema)
-            
-            # 4. Save to Memory
-            self.store.save_learned_concept(c, resp)
-            
-            # Return uniform payload
-            return {
-                "concept": c,
-                "description": resp.get("description", ""),
-                "synonyms": resp.get("synonyms", []),
-                "table_hints": resp.get("table_hints", []),
-                "column_hints": resp.get("column_hints", {}),
-                "learned_at": "Just now (Auto-Learned)"
-            }
-        except Exception as e:
-            # Fallback on LLM failure
-            return {
-                "concept": c,
-                "description": f"Failed to learn using LLM {client_type}: {str(e)}",
-                "synonyms": [],
-                "table_hints": [],
-                "column_hints": {}
-            }
+        import time
+        last_error = ""
+        for provider in order:
+            for attempt in range(3):
+                try:
+                    client = get_client(provider)
+                    resp = client.generate_json(system=system, user=f"Learn concept: {concept}", schema=schema)
+                    
+                    # 4. Save to Memory
+                    self.store.save_learned_concept(c, resp)
+                    
+                    # Return uniform payload
+                    return {
+                        "concept": c,
+                        "description": resp.get("description", ""),
+                        "synonyms": resp.get("synonyms", []),
+                        "table_hints": resp.get("table_hints", []),
+                        "column_hints": resp.get("column_hints", {}),
+                        "learned_at": "Just now (Auto-Learned)"
+                    }
+                except Exception as e:
+                    last_error = str(e)
+                    if "429" in str(e) and attempt < 2:
+                        print(f"Provider {provider} rate limited in auto_learn_concept. Waiting 10s...")
+                        time.sleep(10)
+                        continue
+                    break
+
+        # Fallback on LLM failure
+        return {
+            "concept": c,
+            "description": f"Failed to learn using LLM: {last_error}",
+            "synonyms": [],
+            "table_hints": [],
+            "column_hints": {}
+        }

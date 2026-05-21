@@ -1,21 +1,11 @@
 import os
 import sys
 import chromadb
-import ollama
 from chromadb.utils import embedding_functions
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.db_mysql import get_mysql_conn
-
-class OllamaEmbeddingFunction(embedding_functions.EmbeddingFunction):
-    def __init__(self, model_name: str="nomic-embed-text"):
-        self.model_name = model_name
-
-    def __call__(self, input: list[str]) -> list[list[float]]:
-        # Ollama's embed endpoint takes an array of texts
-        resp = ollama.embed(model=self.model_name, input=input)
-        return resp["embeddings"]
 
 def build_vector_index(run_id: str):
     print(f"Building Vector Index for run: {run_id}")
@@ -48,13 +38,24 @@ def build_vector_index(run_id: str):
     os.makedirs(chroma_path, exist_ok=True)
     client = chromadb.PersistentClient(path=chroma_path)
     
-    emb_fn = OllamaEmbeddingFunction(model_name="nomic-embed-text")
+    emb_fn = embedding_functions.DefaultEmbeddingFunction()
     
     # We use get_or_create to allow idempotent updates
-    collection = client.get_or_create_collection(
-        name="catalog_embeddings",
-        embedding_function=emb_fn
-    )
+    try:
+        collection = client.get_or_create_collection(
+            name="catalog_embeddings",
+            embedding_function=emb_fn
+        )
+    except Exception as e:
+        print(f"Dimension mismatch or error: {e}. Recreating collection...")
+        try:
+            client.delete_collection("catalog_embeddings")
+        except Exception:
+            pass
+        collection = client.get_or_create_collection(
+            name="catalog_embeddings",
+            embedding_function=emb_fn
+        )
     
     # 3. Batch and load data
     ids = []

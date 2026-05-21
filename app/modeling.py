@@ -69,7 +69,12 @@ def classify_table(run_id: str, schema: str, table: str) -> dict:
 def generate_semantic_model(kpi_text: str, facts: list, dims: list) -> str:
     """Uses the LLM to generate a minimal Cube.js YAML model based on the extracted tables."""
     try:
-        client = get_client("local")
+        preferred_llm = getattr(settings, "llm_prefer", "openai")
+        order = [preferred_llm]
+        for fallback in getattr(settings, "llm_fallback_order", ["gemini", "openai"]):
+            if fallback not in order:
+                order.append(fallback)
+                
         system = (
             "You are a Data Engineering assistant. Your task is to generate a minimal Semantic Layer definition "
             "in Cube.js YAML format for the requested KPI using the provided Fact and Dimension tables. "
@@ -81,22 +86,37 @@ def generate_semantic_model(kpi_text: str, facts: list, dims: list) -> str:
             "dimension_tables": [d["schema"] + "." + d["table"] for d in dims]
         }
         
-        # We use strict raw text generation here to avoid newline escaping issues in LLM formatting.
-        resp = client.generate_text(
-            system=system,
-            user=json.dumps(payload, ensure_ascii=False)
-        )
-        
-        # Strip potential markdown blocks if the LLM couldn't follow instructions perfectly
-        if resp.startswith("```yaml"):
-            resp = resp.replace("```yaml", "", 1)
-        elif resp.startswith("```"):
-            resp = resp.replace("```", "", 1)
-            
-        if resp.endswith("```"):
-            resp = resp[:-3]
-            
-        return resp.strip()
+        import time
+        last_error = ""
+        for provider in order:
+            for attempt in range(3):
+                try:
+                    client = get_client(provider)
+                    resp = client.generate_text(
+                        system=system,
+                        user=json.dumps(payload, ensure_ascii=False)
+                    )
+                    
+                    # Strip potential markdown blocks if the LLM couldn't follow instructions perfectly
+                    if resp.startswith("```yaml"):
+                        resp = resp.replace("```yaml", "", 1)
+                    elif resp.startswith("```"):
+                        resp = resp.replace("```", "", 1)
+                        
+                    if resp.endswith("```"):
+                        resp = resp[:-3]
+                        
+                    return resp.strip()
+                except Exception as e:
+                    last_error = str(e)
+                    if "429" in str(e) and attempt < 2:
+                        print(f"Provider {provider} rate limited. Waiting 10s...")
+                        time.sleep(10)
+                        continue
+                    print(f"Provider {provider} failed in generate_semantic_model: {e}")
+                    break
+                
+        return f"# Error generating semantic model:\n# All providers failed. Last error: {last_error}"
     except Exception as e:
         return f"# Error generating semantic model:\n# {str(e)}"
 
@@ -109,6 +129,7 @@ def kpi_to_model(run_id: str, kpi_text: str) -> dict:
         learned = gl.auto_learn_concept(kpi_text)
         if learned.get("description"):
             concept_hits = [(kpi_text, learned)]
+    
     candidates = retrieve_candidates(run_id, kpi_text, max_tables=10)
 
     chosen = []

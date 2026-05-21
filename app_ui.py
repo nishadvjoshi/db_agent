@@ -55,6 +55,27 @@ def fetch_runs_for_db(db_name: str):
         cur.close()
         conn.close()
 
+def fetch_phi_columns(run_id: str) -> pd.DataFrame:
+    conn = get_mysql_conn()
+    cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute(
+            """
+            SELECT schema_name as Database_Name, table_name as Table_Name, 
+                   column_name as Column_Name, inferred_semantic_type as PHI_Type
+            FROM ai_agent_catalog.catalog_profiles
+            WHERE run_id = %s AND inferred_semantic_type LIKE 'PHI_%'
+            ORDER BY schema_name, table_name, column_name
+            """, (run_id,)
+        )
+        rows = cur.fetchall()
+        return pd.DataFrame(rows)
+    except Exception:
+        return pd.DataFrame()
+    finally:
+        cur.close()
+        conn.close()
+
 def execute_query(sql: str) -> pd.DataFrame:
     conn = get_mysql_conn()
     cur = conn.cursor(dictionary=True)
@@ -76,6 +97,9 @@ if st.sidebar.button("💬 Agent Chat"):
     st.rerun()
 if st.sidebar.button("📊 Data Modeler"):
     st.session_state.current_screen = "modeler"
+    st.rerun()
+if st.sidebar.button("🛡️ PHI Dashboard"):
+    st.session_state.current_screen = "phi_dashboard"
     st.rerun()
 
 runs = fetch_runs()
@@ -363,6 +387,39 @@ def render_modeler_screen():
         else:
             st.warning("Please enter a reporting requirement first.")
 
+# Screen 5: PHI Dashboard
+def render_phi_screen():
+    st.title("🛡️ PHI Dashboard")
+    st.markdown("Review all Protected Health Information (PHI) columns identified by the Presidio NLP profiler.")
+    
+    if not st.session_state.active_run_id:
+        st.warning("Please select an active catalog run from the sidebar first.")
+        return
+        
+    df = fetch_phi_columns(st.session_state.active_run_id)
+    if df.empty:
+        st.info("No PHI columns found in this catalog run.")
+        return
+        
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        db_search = st.text_input("Search Database", value="")
+    with col2:
+        table_search = st.text_input("Search Table", value="")
+    with col3:
+        col_search = st.text_input("Search Column", value="")
+        
+    filtered_df = df.copy()
+    if db_search:
+        filtered_df = filtered_df[filtered_df['Database_Name'].str.contains(db_search, case=False, na=False)]
+    if table_search:
+        filtered_df = filtered_df[filtered_df['Table_Name'].str.contains(table_search, case=False, na=False)]
+    if col_search:
+        filtered_df = filtered_df[filtered_df['Column_Name'].str.contains(col_search, case=False, na=False)]
+        
+    st.markdown(f"**Found {len(filtered_df)} PHI Columns**")
+    st.dataframe(filtered_df, use_container_width=True, hide_index=True)
+
 # Main Router
 if st.session_state.current_screen == "connections":
     render_connections_screen()
@@ -374,3 +431,5 @@ elif st.session_state.current_screen == "chat":
     render_chat_screen()
 elif st.session_state.current_screen == "modeler":
     render_modeler_screen()
+elif st.session_state.current_screen == "phi_dashboard":
+    render_phi_screen()
