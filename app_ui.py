@@ -540,13 +540,40 @@ def render_edw_architect_screen():
             facts = st.session_state.edw_blueprint.get("fact_tables", [])
             dims = st.session_state.edw_blueprint.get("dimension_tables", [])
             
+            import re
+            def sanitize(name):
+                return re.sub(r'[^a-zA-Z0-9_]', '_', str(name))
+                
+            # Render Facts and their columns
             for f in facts:
-                mermaid_code += f"    {f['name']} {{\n        FACT role\n    }}\n"
-                # Connect facts to dims simply for visualization
+                fname = sanitize(f['name'])
+                mermaid_code += f"    {fname} {{\n"
+                for c in f.get("columns", []):
+                    cname = sanitize(c["name"])
+                    ctype = sanitize(c.get("type", "string").split("(")[0])
+                    mermaid_code += f"        {ctype} {cname}\n"
+                mermaid_code += "    }\n"
+                
+                # Connect facts to dims only if they share a column name (like patient_id)
+                fact_cols = {c['name'].lower() for c in f.get("columns", [])}
                 for d in dims:
-                    mermaid_code += f"    {f['name']} ||--o{{ {d['name']} : joins\n"
+                    dname = sanitize(d['name'])
+                    dim_cols = {c['name'].lower() for c in d.get("columns", [])}
+                    shared = fact_cols.intersection(dim_cols)
+                    if shared:
+                        # Find the first shared ID or just the first shared column
+                        link_col = next((col for col in shared if "id" in col), list(shared)[0])
+                        mermaid_code += f"    {fname} }}o--|| {dname} : \"{link_col}\"\n"
+
+            # Render Dims and their columns
             for d in dims:
-                mermaid_code += f"    {d['name']} {{\n        DIM role\n    }}\n"
+                dname = sanitize(d['name'])
+                mermaid_code += f"    {dname} {{\n"
+                for c in d.get("columns", []):
+                    cname = sanitize(c["name"])
+                    ctype = sanitize(c.get("type", "string").split("(")[0])
+                    mermaid_code += f"        {ctype} {cname}\n"
+                mermaid_code += "    }\n"
                 
             import streamlit.components.v1 as components
             mermaid_html = f"""
