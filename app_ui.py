@@ -529,95 +529,99 @@ def render_edw_architect_screen():
                 
     # Phase 2: Show Blueprint and DDL
     if st.session_state.edw_blueprint:
-        st.markdown("---")
-        st.subheader(f"🏗️ Proposed Schema: {st.session_state.edw_blueprint.get('blueprint_name', 'Custom DWH')}")
-        st.write(st.session_state.edw_blueprint.get("description", ""))
+        facts = st.session_state.edw_blueprint.get("fact_tables", [])
+        dims = st.session_state.edw_blueprint.get("dimension_tables", [])
         
-        tab1, tab2, tab3 = st.tabs(["📊 Schema Diagram", "🗂️ Table Details", "⚙️ SQL DDL"])
-        
-        with tab1:
-            mermaid_code = "erDiagram\n"
-            facts = st.session_state.edw_blueprint.get("fact_tables", [])
-            dims = st.session_state.edw_blueprint.get("dimension_tables", [])
+        if not facts and not dims:
+            st.error("⚠️ The AI agent returned an empty or incomplete schema (likely due to a timeout). Please try generating the design again.")
+        else:
+            st.markdown("---")
+            st.subheader(f"🏗️ Proposed Schema: {st.session_state.edw_blueprint.get('blueprint_name', 'Custom DWH')}")
+            st.write(st.session_state.edw_blueprint.get("description", ""))
             
-            import re
-            def sanitize(name):
-                return re.sub(r'[^a-zA-Z0-9_]', '_', str(name))
+            tab1, tab2, tab3 = st.tabs(["📊 Schema Diagram", "🗂️ Table Details", "⚙️ SQL DDL"])
+            
+            with tab1:
+                mermaid_code = "erDiagram\n"
                 
-            # Render Facts and their columns
-            for f in facts:
-                fname = sanitize(f['name'])
-                mermaid_code += f"    {fname} {{\n"
-                for c in f.get("columns", []):
-                    cname = sanitize(c["name"])
-                    ctype = sanitize(c.get("type", "string").split("(")[0])
-                    mermaid_code += f"        {ctype} {cname}\n"
-                mermaid_code += "    }\n"
-                
-                # Connect facts to dims only if they share a column name (like patient_id)
-                fact_cols = {c['name'].lower() for c in f.get("columns", [])}
+                import re
+                def sanitize(name):
+                    return re.sub(r'[^a-zA-Z0-9_]', '_', str(name))
+                    
+                # Render Facts and their columns
+                for f in facts:
+                    fname = sanitize(f['name'])
+                    mermaid_code += f"    {fname} {{\n"
+                    for c in f.get("columns", []):
+                        cname = sanitize(c["name"])
+                        ctype = sanitize(c.get("type", "string").split("(")[0])
+                        mermaid_code += f"        {ctype} {cname}\n"
+                    mermaid_code += "    }\n"
+                    
+                    # Connect facts to dims only if they share a column name (like patient_id)
+                    fact_cols = {c['name'].lower() for c in f.get("columns", [])}
+                    for d in dims:
+                        dname = sanitize(d['name'])
+                        dim_cols = {c['name'].lower() for c in d.get("columns", [])}
+                        shared = fact_cols.intersection(dim_cols)
+                        if shared:
+                            # Find the first shared ID or just the first shared column
+                            link_col = next((col for col in shared if "id" in col), list(shared)[0])
+                            mermaid_code += f"    {fname} }}o--|| {dname} : \"{link_col}\"\n"
+    
+                # Render Dims and their columns
                 for d in dims:
                     dname = sanitize(d['name'])
-                    dim_cols = {c['name'].lower() for c in d.get("columns", [])}
-                    shared = fact_cols.intersection(dim_cols)
-                    if shared:
-                        # Find the first shared ID or just the first shared column
-                        link_col = next((col for col in shared if "id" in col), list(shared)[0])
-                        mermaid_code += f"    {fname} }}o--|| {dname} : \"{link_col}\"\n"
-
-            # Render Dims and their columns
-            for d in dims:
-                dname = sanitize(d['name'])
-                mermaid_code += f"    {dname} {{\n"
-                for c in d.get("columns", []):
-                    cname = sanitize(c["name"])
-                    ctype = sanitize(c.get("type", "string").split("(")[0])
-                    mermaid_code += f"        {ctype} {cname}\n"
-                mermaid_code += "    }\n"
+                    mermaid_code += f"    {dname} {{\n"
+                    for c in d.get("columns", []):
+                        cname = sanitize(c["name"])
+                        ctype = sanitize(c.get("type", "string").split("(")[0])
+                        mermaid_code += f"        {ctype} {cname}\n"
+                    mermaid_code += "    }\n"
+                    
+                import streamlit.components.v1 as components
+                mermaid_html = f"""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <script type="module">
+                    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+                    mermaid.initialize({{ startOnLoad: true, theme: 'dark' }});
+                    </script>
+                </head>
+                <body style="background: transparent;">
+                    <pre class="mermaid" style="display: flex; justify-content: center; margin-top: 20px;">
+    {mermaid_code}
+                    </pre>
+                </body>
+                </html>
+                """
+                components.html(mermaid_html, height=400, scrolling=True)
                 
-            import streamlit.components.v1 as components
-            mermaid_html = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <script type="module">
-                import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-                mermaid.initialize({{ startOnLoad: true, theme: 'dark' }});
-                </script>
-            </head>
-            <body style="background: transparent;">
-                <pre class="mermaid" style="display: flex; justify-content: center; margin-top: 20px;">
-{mermaid_code}
-                </pre>
-            </body>
-            </html>
-            """
-            components.html(mermaid_html, height=400, scrolling=True)
-            
-        with tab2:
-            st.markdown("#### Fact Tables")
-            for f in facts:
-                with st.expander(f"Fact: {f['name']}"):
-                    st.write(f"**Sources:** {', '.join(f.get('source_tables', []))}")
-                    df = pd.DataFrame(f.get("columns", []))
-                    if not df.empty:
-                        st.dataframe(df, hide_index=True)
-            st.markdown("#### Dimension Tables")
-            for d in dims:
-                with st.expander(f"Dim: {d['name']}"):
-                    st.write(f"**Sources:** {', '.join(d.get('source_tables', []))}")
-                    df = pd.DataFrame(d.get("columns", []))
-                    if not df.empty:
-                        st.dataframe(df, hide_index=True)
-                        
-        with tab3:
-            st.code(st.session_state.edw_ddl, language="sql")
-            if st.button("🚀 Deploy DWH to Target Database"):
-                with st.spinner("Executing DDLs..."):
-                    if execute_ddl(st.session_state.edw_ddl):
-                        st.success("✅ Enterprise Data Warehouse successfully deployed!")
-                    else:
-                        st.error("Failed to deploy DWH.")
+            with tab2:
+                st.markdown("#### Fact Tables")
+                for f in facts:
+                    with st.expander(f"Fact: {f['name']}"):
+                        st.write(f"**Sources:** {', '.join(f.get('source_tables', []))}")
+                        df = pd.DataFrame(f.get("columns", []))
+                        if not df.empty:
+                            st.dataframe(df, hide_index=True)
+                st.markdown("#### Dimension Tables")
+                for d in dims:
+                    with st.expander(f"Dim: {d['name']}"):
+                        st.write(f"**Sources:** {', '.join(d.get('source_tables', []))}")
+                        df = pd.DataFrame(d.get("columns", []))
+                        if not df.empty:
+                            st.dataframe(df, hide_index=True)
+                            
+            with tab3:
+                st.code(st.session_state.edw_ddl, language="sql")
+                if st.button("🚀 Deploy DWH to Target Database"):
+                    with st.spinner("Executing DDLs..."):
+                        if execute_ddl(st.session_state.edw_ddl):
+                            st.success("✅ Enterprise Data Warehouse successfully deployed!")
+                        else:
+                            st.error("Failed to deploy DWH.")
 
 # Main Router
 if st.session_state.current_screen == "connections":

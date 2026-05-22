@@ -20,7 +20,7 @@ class OllamaClient(LLMClient):
         r = requests.post(
             f"{self.base_url}/api/generate",
             json={"model": self.model, "prompt": prompt, "format": "json", "stream": False},
-            timeout=120,
+            timeout=600,
         )
         r.raise_for_status()
         text = r.json().get("response", "").strip()
@@ -37,7 +37,7 @@ class OllamaClient(LLMClient):
         r = requests.post(
             f"{self.base_url}/api/generate",
             json={"model": self.model, "prompt": prompt, "stream": False},
-            timeout=120,
+            timeout=600,
         )
         r.raise_for_status()
         return r.json().get("response", "").strip()
