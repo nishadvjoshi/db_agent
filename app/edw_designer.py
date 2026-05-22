@@ -85,13 +85,16 @@ def generate_edw_blueprint(run_id: str, user_prompt: str) -> Dict[str, Any]:
     
     system_prompt = (
         "You are an expert Data Architect. Based on the provided database context and the user's reporting requirement, "
-        "design a comprehensive Data Warehouse Star Schema. "
+        "design a comprehensive Enterprise Data Warehouse Star Schema that strictly follows SCD (Slowly Changing Dimension) principles.\n"
         "You must return a JSON object containing:\n"
         "- 'blueprint_name': A short name for the EDW.\n"
         "- 'description': A brief explanation of the design.\n"
         "- 'fact_tables': A list of fact table objects. Each object must have 'name' (the new fact table name), "
-        "'source_tables' (list of original tables it draws from), and 'columns' (list of objects with 'name', 'type', and 'source_column').\n"
-        "- 'dimension_tables': A list of dimension table objects formatted exactly like the fact_tables.\n"
+        "'source_tables' (list of original tables it draws from), and 'columns' (list of objects with 'name', 'type', and 'source_column'). "
+        "Fact tables should link to dimensions using the dimension's surrogate key.\n"
+        "- 'dimension_tables': A list of dimension table objects formatted exactly like the fact_tables. "
+        "Every dimension MUST include the following standard SCD metadata columns: "
+        "'meta_surr_key' (PK), 'meta_hash_key', 'meta_eff_date', 'meta_end_date', 'meta_iud_flag', plus any necessary business columns.\n"
         "Ensure all data types are valid MySQL types."
     )
     
@@ -155,42 +158,20 @@ def generate_edw_ddl(blueprint: Dict[str, Any], target_schema: str = "analytics_
     for dim in blueprint.get("dimension_tables", []):
         table_name = dim.get("name")
         cols = []
-        selects = []
         for c in dim.get("columns", []):
             cols.append(f"  `{c['name']}` {c.get('type', 'VARCHAR(255)')}")
-            selects.append(f"`{c.get('source_column', c['name'])}`")
             
         ddl.append(f"DROP TABLE IF EXISTS `{table_name}`;")
-        ddl.append(f"CREATE TABLE `{table_name}` (\n" + ",\n".join(cols) + "\n);")
-        
-        # Best effort INSERT generation (assuming a single primary source table for simplicity in the MVP)
-        sources = dim.get("source_tables", [])
-        if sources:
-            source = sources[0]
-            # Strip schema prefix if it exists in the blueprint
-            if "." in source:
-                source = source.split(".")[1]
-            # If the user has a specific source schema mapped, we'd use it. For now, assume current context or raw table.
-            # In a true deployment we need the actual schema. We will use the target DB's default.
-            ddl.append(f"INSERT INTO `{table_name}`\nSELECT " + ", ".join(selects) + f" FROM `physician_portal`.`{source}`;\n")
+        ddl.append(f"CREATE TABLE `{table_name}` (\n" + ",\n".join(cols) + "\n);\n")
     
     # Generate Facts
     for fact in blueprint.get("fact_tables", []):
         table_name = fact.get("name")
         cols = []
-        selects = []
         for c in fact.get("columns", []):
             cols.append(f"  `{c['name']}` {c.get('type', 'INT')}")
-            selects.append(f"`{c.get('source_column', c['name'])}`")
             
         ddl.append(f"DROP TABLE IF EXISTS `{table_name}`;")
-        ddl.append(f"CREATE TABLE `{table_name}` (\n" + ",\n".join(cols) + "\n);")
-        
-        sources = fact.get("source_tables", [])
-        if sources:
-            source = sources[0]
-            if "." in source:
-                source = source.split(".")[1]
-            ddl.append(f"INSERT INTO `{table_name}`\nSELECT " + ", ".join(selects) + f" FROM `physician_portal`.`{source}`;\n")
+        ddl.append(f"CREATE TABLE `{table_name}` (\n" + ",\n".join(cols) + "\n);\n")
             
     return "\n".join(ddl)
