@@ -8,6 +8,48 @@ from app.catalog_store import CatalogStore
 from app.llm.catalog_describer import CatalogDescriber
 from scripts.embed_catalog import build_vector_index
 from app.modeling import kpi_to_model
+from app.edw_designer import propose_edw_themes, generate_edw_blueprint, generate_edw_ddl
+
+# --- PREMIUM CSS INJECTION ---
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif;
+}
+.stApp {
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+}
+h1, h2, h3, h4, h5, h6, p, span, div {
+    color: #f8fafc !important;
+}
+div[data-testid="stVerticalBlock"] > div {
+    background: rgba(30, 41, 59, 0.4);
+    border-radius: 12px;
+    padding: 1rem;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.stButton>button {
+    background: linear-gradient(to right, #3b82f6, #2dd4bf);
+    color: white !important;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    transition: all 0.3s ease;
+}
+.stButton>button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 15px -3px rgba(59, 130, 246, 0.5);
+}
+.stTextInput>div>div>input {
+    background-color: rgba(15, 23, 42, 0.6) !important;
+    color: white !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+</style>
+""", unsafe_allow_html=True)
+# -----------------------------
 
 st.set_page_config(page_title="MySQL AI Agent", page_icon="🤖", layout="wide")
 
@@ -81,8 +123,23 @@ def execute_query(sql: str) -> pd.DataFrame:
     cur = conn.cursor(dictionary=True)
     try:
         cur.execute(sql)
-        rows = cur.fetchall()
         return pd.DataFrame(rows)
+    finally:
+        cur.close()
+        conn.close()
+
+def execute_ddl(sql: str) -> bool:
+    conn = get_mysql_conn()
+    cur = conn.cursor()
+    try:
+        # Multi=True allows executing multiple statements separated by semicolon
+        for result in cur.execute(sql, multi=True):
+            pass
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"DDL Execution Error: {e}")
+        return False
     finally:
         cur.close()
         conn.close()
@@ -97,6 +154,9 @@ if st.sidebar.button("💬 Agent Chat"):
     st.rerun()
 if st.sidebar.button("📊 Data Modeler"):
     st.session_state.current_screen = "modeler"
+    st.rerun()
+if st.sidebar.button("🏛️ EDW Architect"):
+    st.session_state.current_screen = "edw_architect"
     st.rerun()
 if st.sidebar.button("🛡️ PHI Dashboard"):
     st.session_state.current_screen = "phi_dashboard"
@@ -420,6 +480,118 @@ def render_phi_screen():
     st.markdown(f"**Found {len(filtered_df)} PHI Columns**")
     st.dataframe(filtered_df, use_container_width=True, hide_index=True)
 
+# Screen 6: EDW Architect
+def render_edw_architect_screen():
+    st.title("🏛️ Enterprise Data Warehouse Architect")
+    st.markdown("Automated Domain Analysis, Fact/Dimension Design, and DDL Deployment.")
+    
+    if not st.session_state.active_run_id:
+        st.warning("Please select an active catalog run from the sidebar first.")
+        return
+        
+    if "edw_themes" not in st.session_state:
+        st.session_state.edw_themes = []
+        
+    if "edw_blueprint" not in st.session_state:
+        st.session_state.edw_blueprint = None
+        
+    if "edw_ddl" not in st.session_state:
+        st.session_state.edw_ddl = None
+        
+    # Phase 1: Propose Themes
+    if not st.session_state.edw_themes:
+        if st.button("Analyze Database Domain"):
+            with st.spinner("Analyzing hundreds of tables and generating domain context..."):
+                themes = propose_edw_themes(st.session_state.active_run_id)
+                st.session_state.edw_themes = themes
+                st.rerun()
+    else:
+        st.subheader("💡 Recommended Architectures")
+        cols = st.columns(len(st.session_state.edw_themes) if st.session_state.edw_themes else 1)
+        for i, theme in enumerate(st.session_state.edw_themes):
+            with cols[i]:
+                st.info(f"**{theme.get('theme_name', 'Theme')}**\n\n{theme.get('description', '')}")
+                
+        st.markdown("---")
+        st.subheader("🛠️ Design Your Data Warehouse")
+        user_req = st.text_area("What kind of reporting requirements do you have? (You can choose a theme above or describe a custom one)")
+        
+        if st.button("Generate Full DWH Design"):
+            if user_req:
+                with st.spinner("Designing Star Schema (Facts & Dimensions)..."):
+                    bp = generate_edw_blueprint(st.session_state.active_run_id, user_req)
+                    st.session_state.edw_blueprint = bp
+                    if bp:
+                        st.session_state.edw_ddl = generate_edw_ddl(bp)
+                    st.rerun()
+            else:
+                st.warning("Please describe your requirements.")
+                
+    # Phase 2: Show Blueprint and DDL
+    if st.session_state.edw_blueprint:
+        st.markdown("---")
+        st.subheader(f"🏗️ Proposed Schema: {st.session_state.edw_blueprint.get('blueprint_name', 'Custom DWH')}")
+        st.write(st.session_state.edw_blueprint.get("description", ""))
+        
+        tab1, tab2, tab3 = st.tabs(["📊 Schema Diagram", "🗂️ Table Details", "⚙️ SQL DDL"])
+        
+        with tab1:
+            mermaid_code = "erDiagram\n"
+            facts = st.session_state.edw_blueprint.get("fact_tables", [])
+            dims = st.session_state.edw_blueprint.get("dimension_tables", [])
+            
+            for f in facts:
+                mermaid_code += f"    {f['name']} {{\n        FACT role\n    }}\n"
+                # Connect facts to dims simply for visualization
+                for d in dims:
+                    mermaid_code += f"    {f['name']} ||--o{{ {d['name']} : joins\n"
+            for d in dims:
+                mermaid_code += f"    {d['name']} {{\n        DIM role\n    }}\n"
+                
+            import streamlit.components.v1 as components
+            mermaid_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <script type="module">
+                import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+                mermaid.initialize({{ startOnLoad: true, theme: 'dark' }});
+                </script>
+            </head>
+            <body style="background: transparent;">
+                <pre class="mermaid" style="display: flex; justify-content: center; margin-top: 20px;">
+{mermaid_code}
+                </pre>
+            </body>
+            </html>
+            """
+            components.html(mermaid_html, height=400, scrolling=True)
+            
+        with tab2:
+            st.markdown("#### Fact Tables")
+            for f in facts:
+                with st.expander(f"Fact: {f['name']}"):
+                    st.write(f"**Sources:** {', '.join(f.get('source_tables', []))}")
+                    df = pd.DataFrame(f.get("columns", []))
+                    if not df.empty:
+                        st.dataframe(df, hide_index=True)
+            st.markdown("#### Dimension Tables")
+            for d in dims:
+                with st.expander(f"Dim: {d['name']}"):
+                    st.write(f"**Sources:** {', '.join(d.get('source_tables', []))}")
+                    df = pd.DataFrame(d.get("columns", []))
+                    if not df.empty:
+                        st.dataframe(df, hide_index=True)
+                        
+        with tab3:
+            st.code(st.session_state.edw_ddl, language="sql")
+            if st.button("🚀 Deploy DWH to Target Database"):
+                with st.spinner("Executing DDLs..."):
+                    if execute_ddl(st.session_state.edw_ddl):
+                        st.success("✅ Enterprise Data Warehouse successfully deployed!")
+                    else:
+                        st.error("Failed to deploy DWH.")
+
 # Main Router
 if st.session_state.current_screen == "connections":
     render_connections_screen()
@@ -431,5 +603,7 @@ elif st.session_state.current_screen == "chat":
     render_chat_screen()
 elif st.session_state.current_screen == "modeler":
     render_modeler_screen()
+elif st.session_state.current_screen == "edw_architect":
+    render_edw_architect_screen()
 elif st.session_state.current_screen == "phi_dashboard":
     render_phi_screen()
