@@ -51,20 +51,30 @@ def propose_edw_themes(run_id: str) -> List[Dict[str, str]]:
         "Return a JSON array of objects, each with 'theme_name' and 'description'."
     )
     
+    schema = {
+        "type": "object",
+        "properties": {
+            "themes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "theme_name": {"type": "string"},
+                        "description": {"type": "string"}
+                    },
+                    "required": ["theme_name", "description"]
+                }
+            }
+        },
+        "required": ["themes"]
+    }
+    
     preferred_llm = getattr(settings, "llm_prefer", "openai")
     client = get_client(preferred_llm)
     
     try:
-        resp = client.generate_json(system=system_prompt, user=domain_context)
-        # Handle cases where the LLM returns an object containing an array vs the array itself
-        if isinstance(resp, dict):
-            for k, v in resp.items():
-                if isinstance(v, list):
-                    return v
-            return [resp]
-        if isinstance(resp, list):
-            return resp
-        return []
+        resp = client.generate_json(system=system_prompt, user=domain_context, schema=schema)
+        return resp.get("themes", [])
     except Exception as e:
         print(f"Failed to propose themes: {e}")
         return []
@@ -85,11 +95,43 @@ def generate_edw_blueprint(run_id: str, user_prompt: str) -> Dict[str, Any]:
         "Ensure all data types are valid MySQL types."
     )
     
+    table_schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "source_tables": {"type": "array", "items": {"type": "string"}},
+            "columns": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "type": {"type": "string"},
+                        "source_column": {"type": "string"}
+                    },
+                    "required": ["name", "type", "source_column"]
+                }
+            }
+        },
+        "required": ["name", "source_tables", "columns"]
+    }
+    
+    schema = {
+        "type": "object",
+        "properties": {
+            "blueprint_name": {"type": "string"},
+            "description": {"type": "string"},
+            "fact_tables": {"type": "array", "items": table_schema},
+            "dimension_tables": {"type": "array", "items": table_schema}
+        },
+        "required": ["blueprint_name", "description", "fact_tables", "dimension_tables"]
+    }
+    
     preferred_llm = getattr(settings, "llm_prefer", "openai")
     client = get_client(preferred_llm)
     
     try:
-        blueprint = client.generate_json(system=system_prompt, user=f"Context: {domain_context}\n\nUser Requirement: {user_prompt}")
+        blueprint = client.generate_json(system=system_prompt, user=f"Context: {domain_context}\n\nUser Requirement: {user_prompt}", schema=schema)
         return blueprint
     except Exception as e:
         print(f"Failed to generate blueprint: {e}")
