@@ -9,3 +9,6 @@ presidio-analyzer
 presidio-anonymizer
 spacy
 
+sqlalchemy
+pymssql
+psycopg2-binary

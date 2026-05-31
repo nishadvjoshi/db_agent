@@ -9,6 +9,7 @@ class OllamaClient(LLMClient):
         cfg = getattr(settings, "llm_local", None) or {}
         self.base_url = cfg.get("base_url", "http://localhost:11434")
         self.model = cfg.get("model", "llama3.1:8b")
+        self.timeout = getattr(settings, "llm_local_timeout", 15)
 
     def generate_json(self, system: str, user: str, schema: Dict[str, Any]) -> Dict[str, Any]:
         prompt = (
@@ -19,8 +20,17 @@ class OllamaClient(LLMClient):
 
         r = requests.post(
             f"{self.base_url}/api/generate",
-            json={"model": self.model, "prompt": prompt, "format": "json", "stream": False},
-            timeout=600,
+            json={
+                "model": self.model, 
+                "prompt": prompt, 
+                "format": "json", 
+                "stream": False,
+                "options": {
+                    "num_ctx": 8192,
+                    "num_predict": -1
+                }
+            },
+            timeout=self.timeout,
         )
         r.raise_for_status()
         text = r.json().get("response", "").strip()
@@ -37,7 +47,7 @@ class OllamaClient(LLMClient):
         r = requests.post(
             f"{self.base_url}/api/generate",
             json={"model": self.model, "prompt": prompt, "stream": False},
-            timeout=600,
+            timeout=self.timeout,
         )
         r.raise_for_status()
         return r.json().get("response", "").strip()

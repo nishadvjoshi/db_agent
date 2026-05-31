@@ -57,14 +57,14 @@ def _fetchall_dict(cur) -> List[Dict[str, Any]]:
     return out
 
 
-def crawl_database(include_schemas: Optional[Sequence[str]] = None, exclude_schemas: Optional[Sequence[str]] = None) -> str:
+def crawl_database(include_schemas: Optional[Sequence[str]] = None, exclude_schemas: Optional[Sequence[str]] = None, run_id: Optional[str] = None, conn_id: Optional[str] = None) -> str:
     """Crawl Target Database metadata and persist a catalog via CatalogStore."""
 
     from app.catalog_store import CatalogStore  # local import to avoid circular deps
     from app.config import settings
     from app.adapters.factory import get_adapter
 
-    run_id = str(uuid.uuid4())
+    run_id = run_id or str(uuid.uuid4())
     filters = CrawlFilters.from_args(include_schemas, exclude_schemas)
 
     target_params = {
@@ -74,10 +74,25 @@ def crawl_database(include_schemas: Optional[Sequence[str]] = None, exclude_sche
         "password": settings.target_db_password,
         "database": settings.target_db_name,
     }
+    db_type = settings.target_db_type
+
+    if conn_id:
+        store = CatalogStore()
+        conn = store.get_connection(conn_id)
+        if conn:
+            db_type = conn.get("db_type", "mysql").lower()
+            target_params = {
+                "host": conn.get("host"),
+                "port": conn.get("port"),
+                "user": conn.get("username"),
+                "password": conn.get("password"),
+                "database": conn.get("database_name"),
+            }
+
     # For demo simplicity we remove empty properties that pyodbc/psycopg2 might complain about
     target_params = {k: v for k, v in target_params.items() if v}
     
-    adapter = get_adapter(settings.target_db_type, target_params)
+    adapter = get_adapter(db_type, target_params)
 
     # 1) Schemas
     all_schemas = adapter.get_schemas(filters.include_schemas, filters.exclude_schemas)

@@ -74,12 +74,16 @@ def propose_sql(run_id: str, question: str, context: dict | None = None):
         previous_errors = []
         plan = None
         
+        history_records = store.get_chat_history(run_id)
+        chat_history = [{"role": r["role"], "content": r["content"]} for r in history_records[-6:]] if history_records else []
+        
         for attempt in range(max_retries):
             plan = plan_request(
                 question=question, 
                 catalog_ctx=catalog_ctx, 
                 glossary_ctx=glossary,
-                previous_errors=previous_errors
+                previous_errors=previous_errors,
+                chat_history=chat_history
             )
             
             if plan.action == "SQL" and plan.sql:

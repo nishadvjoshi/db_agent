@@ -44,6 +44,7 @@ class Settings:
         self.llm_min_confidence = float(llm.get("min_confidence", 0.75))
         self.llm_fallback_order = llm.get("fallback_order", ["openai", "gemini"])
         self.llm_local = llm.get("local", {}) or {}
+        self.llm_local_timeout = int(self.llm_local.get("timeout", 15))
         self.llm_openai = llm.get("openai", {}) or {}
         self.llm_gemini = llm.get("gemini", {}) or {}
 

@@ -74,6 +74,7 @@ def plan_request(
     catalog_ctx: Dict[str, Any],
     glossary_ctx: Optional[Dict[str, Any]] = None,
     previous_errors: Optional[List[str]] = None,
+    chat_history: Optional[List[Dict[str, str]]] = None,
 ) -> Plan:
     """LLM-first planner.
 
@@ -92,6 +93,7 @@ def plan_request(
                 catalog_ctx=catalog_ctx,
                 glossary_ctx=glossary_ctx,
                 previous_errors=previous_errors,
+                chat_history=chat_history,
             )
             plan = _normalize_plan(raw, provider_used=provider)
 
@@ -149,6 +151,7 @@ def _call_planner_llm(
     catalog_ctx: Dict[str, Any],
     glossary_ctx: Optional[Dict[str, Any]],
     previous_errors: Optional[List[str]] = None,
+    chat_history: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
     client = get_client(provider)
 
@@ -172,6 +175,7 @@ def _call_planner_llm(
 
     payload = {
         "question": question,
+        "chat_history": chat_history or [],
         "catalog": catalog_ctx,
         "glossary": glossary_ctx or {},
         "previous_errors": previous_errors or [],

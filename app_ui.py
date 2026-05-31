@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+# Force Streamlit to reload the backend files
 from app.agent import propose_sql
 from app.db_mysql import get_mysql_conn, get_databases
 from app.crawler import crawl_database
@@ -7,7 +8,7 @@ from app.profiler import profile_run
 from app.catalog_store import CatalogStore
 from app.llm.catalog_describer import CatalogDescriber
 from scripts.embed_catalog import build_vector_index
-from app.modeling import kpi_to_model
+from app.modeling import kpi_to_model, classify_table
 from app.edw_designer import propose_edw_themes, generate_edw_blueprint, generate_edw_ddl
 
 # --- PREMIUM CSS INJECTION ---
@@ -23,12 +24,9 @@ html, body, [class*="css"] {
 h1, h2, h3, h4, h5, h6, p, span, div {
     color: #f8fafc !important;
 }
-div[data-testid="stVerticalBlock"] > div {
+/* Remove global vertical block styles to avoid chunky grid borders */
+div[data-testid="stSidebar"] > div {
     background: rgba(30, 41, 59, 0.4);
-    border-radius: 12px;
-    padding: 1rem;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
-    border: 1px solid rgba(255, 255, 255, 0.05);
 }
 .stButton>button {
     background: linear-gradient(to right, #3b82f6, #2dd4bf);
@@ -492,6 +490,9 @@ def render_edw_architect_screen():
     if "edw_themes" not in st.session_state:
         st.session_state.edw_themes = []
         
+    if "edw_config_df" not in st.session_state:
+        st.session_state.edw_config_df = None
+        
     if "edw_blueprint" not in st.session_state:
         st.session_state.edw_blueprint = None
         
@@ -504,6 +505,45 @@ def render_edw_architect_screen():
             with st.spinner("Analyzing hundreds of tables and generating domain context..."):
                 themes = propose_edw_themes(st.session_state.active_run_id)
                 st.session_state.edw_themes = themes
+                
+                # Fetch default config for grid
+                store = CatalogStore()
+                existing_config = store.load_edw_config(st.session_state.active_run_id)
+                if not existing_config:
+                    con = store._conn()
+                    cur = con.cursor(dictionary=True)
+                    cur.execute("SELECT schema_name, table_name FROM catalog_tables WHERE run_id=%s", (st.session_state.active_run_id,))
+                    tables = cur.fetchall()
+                    cur.close()
+                    con.close()
+                    existing_config = []
+                    for t in tables:
+                        # Intelligent Role Defaulting using Heuristics
+                        classification = classify_table(st.session_state.active_run_id, t["schema_name"], t["table_name"])
+                        guessed_role = "Fact" if "FACT" in classification.get("role", "") else "Dimension"
+                        
+                        existing_config.append({
+                            "table_name": t["table_name"],
+                            "is_included": True,
+                            "table_role": guessed_role,
+                            "scd_type": "Type 2",
+                            "type_3_columns": ""
+                        })
+                st.session_state.edw_config_df = pd.DataFrame(existing_config)
+                st.session_state.edw_config_grid = existing_config
+                
+                # Fetch columns mapping for Type 3 dropdowns
+                con = store._conn()
+                cur = con.cursor(dictionary=True)
+                cur.execute("SELECT table_name, column_name FROM catalog_columns WHERE run_id=%s", (st.session_state.active_run_id,))
+                cols = cur.fetchall()
+                cur.close()
+                con.close()
+                col_map = {}
+                for c in cols:
+                    col_map.setdefault(c["table_name"], []).append(c["column_name"])
+                st.session_state.edw_table_columns = col_map
+                
                 st.rerun()
     else:
         st.subheader("💡 Recommended Architectures")
@@ -513,13 +553,71 @@ def render_edw_architect_screen():
                 st.info(f"**{theme.get('theme_name', 'Theme')}**\n\n{theme.get('description', '')}")
                 
         st.markdown("---")
-        st.subheader("🛠️ Design Your Data Warehouse")
+        st.markdown("---")
+        st.subheader("🛠️ Configure Data Warehouse Tables")
+        st.write("Select which tables to include and configure their SCD types. The AI will strictly follow these rules.")
+        
+        if "edw_config_grid" not in st.session_state:
+            if st.session_state.edw_config_df is not None:
+                st.session_state.edw_config_grid = st.session_state.edw_config_df.to_dict('records')
+            else:
+                st.session_state.edw_config_grid = []
+                
+        # Custom Dynamic Grid Header
+        col1, col2, col3, col4, col5 = st.columns([3, 1, 2, 2, 4])
+        with col1: st.markdown("**Table Name**")
+        with col2: st.markdown("**Include?**")
+        with col3: st.markdown("**Role**")
+        with col4: st.markdown("**SCD Type**")
+        with col5: st.markdown("**Tracked Columns (Type 3)**")
+        st.markdown("---")
+        
+        updated_grid = []
+        for i, config in enumerate(st.session_state.edw_config_grid):
+            col1, col2, col3, col4, col5 = st.columns([3, 1, 2, 2, 4])
+            tname = config.get('table_name', '')
+            
+            with col1: 
+                st.write(tname)
+            with col2: 
+                is_inc = st.checkbox("Inc", value=bool(config.get('is_included', True)), key=f"inc_{i}", label_visibility="collapsed")
+            with col3: 
+                r_idx = 0 if config.get('table_role', 'Dimension') == 'Dimension' else 1
+                role = st.selectbox("Role", ["Dimension", "Fact"], index=r_idx, key=f"rol_{i}", label_visibility="collapsed")
+            with col4: 
+                s_opts = ["None", "Type 1", "Type 2", "Type 3"]
+                s_idx = s_opts.index(config.get('scd_type', 'Type 2')) if config.get('scd_type') in s_opts else 2
+                scd = st.selectbox("SCD Type", s_opts, index=s_idx, key=f"scd_{i}", label_visibility="collapsed")
+            with col5: 
+                if scd == "Type 3":
+                    options = st.session_state.get("edw_table_columns", {}).get(tname, [])
+                    curr_str = config.get('type_3_columns', '')
+                    curr_list = [c.strip() for c in curr_str.split(',') if c.strip() in options] if curr_str else []
+                    t3_cols = st.multiselect("Columns", options=options, default=curr_list, key=f"t3_{i}", label_visibility="collapsed")
+                    t3_str = ",".join(t3_cols)
+                else:
+                    t3_str = ""
+                    st.empty()
+                    
+            updated_grid.append({
+                "table_name": tname,
+                "is_included": is_inc,
+                "table_role": role,
+                "scd_type": scd,
+                "type_3_columns": t3_str
+            })
+            
+        st.session_state.edw_config_grid = updated_grid
+        
         user_req = st.text_area("What kind of reporting requirements do you have? (You can choose a theme above or describe a custom one)")
         
-        if st.button("Generate Full DWH Design"):
+        if st.button("Save Config & Generate DWH Design"):
             if user_req:
                 with st.spinner("Designing Star Schema (Facts & Dimensions)..."):
-                    bp = generate_edw_blueprint(st.session_state.active_run_id, user_req)
+                    grid_configs = st.session_state.edw_config_grid
+                    CatalogStore().save_edw_config(st.session_state.active_run_id, grid_configs)
+                    
+                    bp = generate_edw_blueprint(st.session_state.active_run_id, user_req, user_config=grid_configs)
                     st.session_state.edw_blueprint = bp
                     if bp:
                         st.session_state.edw_ddl = generate_edw_ddl(bp)

@@ -29,6 +29,8 @@ class CatalogDescriber:
         for f in fallback_list:
             if f in self.clients and f not in self.order:
                 self.order.append(f)
+                
+        self.failed_counts = {p: 0 for p in self.order}
 
     def generate_table_description(self, schema_name: str, table_name: str, columns: List[Dict[str, Any]]) -> tuple[str, str]:
         """
@@ -55,18 +57,24 @@ class CatalogDescriber:
                     "description": "The concise business description of the table"
                 }
             },
-            "required": ["description"]
+            "required": ["description"],
+            "additionalProperties": False
         }
 
         for provider in self.order:
+            if self.failed_counts[provider] >= 3:
+                continue
+                
             client = self.clients[provider]
             try:
                 logger.info(f"Attempting to generate description for table {table_name} using {provider}")
                 result = client.generate_json(system_prompt, user_prompt, schema)
                 desc = result.get("description", "").strip()
                 if desc:
+                    self.failed_counts[provider] = 0 # reset on success
                     return desc, provider
             except Exception as e:
+                self.failed_counts[provider] += 1
                 logger.warning(f"Provider {provider} failed for table {table_name}: {e}")
 
         return "Could not generate description.", "none"
@@ -91,17 +99,23 @@ class CatalogDescriber:
             "properties": {
                 "description": {"type": "string"}
             },
-            "required": ["description"]
+            "required": ["description"],
+            "additionalProperties": False
         }
 
         for provider in self.order:
+            if self.failed_counts[provider] >= 3:
+                continue
+                
             client = self.clients[provider]
             try:
                 result = client.generate_json(system_prompt, user_prompt, schema)
                 desc = result.get("description", "").strip()
                 if desc:
+                    self.failed_counts[provider] = 0 # reset on success
                     return desc, provider
             except Exception as e:
+                self.failed_counts[provider] += 1
                 pass
 
         return "Could not generate description.", "none"

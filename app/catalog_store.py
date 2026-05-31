@@ -130,6 +130,63 @@ class CatalogStore:
                     column_hints_json TEXT,
                     learned_at VARCHAR(64)
                 )
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS `catalog_edw_configs` (
+                    run_id VARCHAR(64),
+                    table_name VARCHAR(255),
+                    is_included BOOLEAN DEFAULT TRUE,
+                    table_role VARCHAR(64),
+                    scd_type VARCHAR(64),
+                    type_3_columns TEXT,
+                    PRIMARY KEY (run_id, table_name)
+                )
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS `catalog_connections` (
+                    connection_id VARCHAR(64) PRIMARY KEY,
+                    name VARCHAR(255),
+                    db_type VARCHAR(64),
+                    host VARCHAR(255),
+                    port INT,
+                    username VARCHAR(255),
+                    password VARCHAR(255),
+                    database_name VARCHAR(255),
+                    created_at VARCHAR(64)
+                )
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS `catalog_run_logs` (
+                    log_id INT AUTO_INCREMENT PRIMARY KEY,
+                    run_id VARCHAR(64),
+                    timestamp VARCHAR(64),
+                    level VARCHAR(32),
+                    message TEXT,
+                    INDEX (run_id)
+                )
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS `catalog_chat_messages` (
+                    msg_id INT AUTO_INCREMENT PRIMARY KEY,
+                    run_id VARCHAR(64),
+                    role VARCHAR(32),
+                    content TEXT,
+                    sql_query TEXT,
+                    data_json LONGTEXT,
+                    provider VARCHAR(64),
+                    confidence VARCHAR(64),
+                    created_at VARCHAR(64),
+                    INDEX (run_id)
+                )
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS `catalog_ddd_artifacts` (
+                    run_id VARCHAR(64),
+                    artifact_type VARCHAR(64),
+                    payload_json LONGTEXT,
+                    created_at VARCHAR(64),
+                    PRIMARY KEY (run_id, artifact_type)
+                )
                 """
             ]
             for ddl in tables_ddl:
@@ -641,6 +698,212 @@ class CatalogStore:
                 )
 
             return {"run_id": run["run_id"], "created_at": run["created_at"], "schemas": schemas, "edges": edges}
+        finally:
+            cur.close()
+            con.close()
+
+    def save_edw_config(self, run_id: str, table_configs: List[Dict[str, Any]]):
+        """Saves EDW table configurations to catalog_edw_configs."""
+        con = self._conn()
+        cur = con.cursor()
+        try:
+            # Delete existing configs for this run
+            cur.execute("DELETE FROM `catalog_edw_configs` WHERE run_id=%s", (run_id,))
+            
+            # Insert new configs
+            for config in table_configs:
+                cur.execute(
+                    """
+                    INSERT INTO `catalog_edw_configs` 
+                    (run_id, table_name, is_included, table_role, scd_type, type_3_columns)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        run_id,
+                        config.get("table_name"),
+                        config.get("is_included", True),
+                        config.get("table_role", "Dimension"),
+                        config.get("scd_type", "Type 2"),
+                        config.get("type_3_columns", "")
+                    )
+                )
+            con.commit()
+        finally:
+            cur.close()
+            con.close()
+
+    def load_edw_config(self, run_id: str) -> List[Dict[str, Any]]:
+        """Loads EDW table configurations for a given run."""
+        con = self._conn()
+        cur = con.cursor(dictionary=True)
+        try:
+            cur.execute("SELECT * FROM `catalog_edw_configs` WHERE run_id=%s", (run_id,))
+            return cur.fetchall()
+        finally:
+            cur.close()
+            con.close()
+
+    # ----------------------------
+    # Run Logs
+    # ----------------------------
+
+    def log_run_event(self, run_id: str, level: str, message: str) -> None:
+        con = self._conn()
+        cur = con.cursor()
+        try:
+            now = datetime.utcnow().isoformat()
+            cur.execute(
+                """
+                INSERT INTO `catalog_run_logs` (run_id, timestamp, level, message)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (run_id, now, level, message)
+            )
+            con.commit()
+        finally:
+            cur.close()
+            con.close()
+
+    def get_run_logs(self, run_id: str) -> List[Dict[str, Any]]:
+        con = self._conn()
+        cur = con.cursor(dictionary=True)
+        try:
+            cur.execute(
+                "SELECT * FROM `catalog_run_logs` WHERE run_id=%s ORDER BY log_id ASC",
+                (run_id,)
+            )
+            return cur.fetchall()
+        finally:
+            cur.close()
+            con.close()
+
+    # ----------------------------
+    # Connections
+    # ----------------------------
+
+    def save_connection(self, conn_id: str, payload: Dict[str, Any]) -> None:
+        con = self._conn()
+        cur = con.cursor()
+        try:
+            now = datetime.utcnow().isoformat()
+            cur.execute(
+                """
+                INSERT INTO `catalog_connections` (connection_id, name, db_type, host, port, username, password, database_name, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    name=VALUES(name), db_type=VALUES(db_type), host=VALUES(host), port=VALUES(port),
+                    username=VALUES(username), password=VALUES(password), database_name=VALUES(database_name)
+                """,
+                (
+                    conn_id, payload.get("name"), payload.get("db_type"), payload.get("host"),
+                    payload.get("port"), payload.get("username"), payload.get("password"),
+                    payload.get("database_name"), now
+                )
+            )
+            con.commit()
+        finally:
+            cur.close()
+            con.close()
+
+    def get_connections(self) -> List[Dict[str, Any]]:
+        con = self._conn()
+        cur = con.cursor(dictionary=True)
+        try:
+            cur.execute("SELECT connection_id, name, db_type, host, port, username, database_name, created_at FROM `catalog_connections` ORDER BY created_at DESC")
+            return cur.fetchall()
+        finally:
+            cur.close()
+            con.close()
+            
+    def get_connection(self, conn_id: str) -> Optional[Dict[str, Any]]:
+        con = self._conn()
+        cur = con.cursor(dictionary=True)
+        try:
+            cur.execute("SELECT * FROM `catalog_connections` WHERE connection_id=%s", (conn_id,))
+            return cur.fetchone()
+        finally:
+            cur.close()
+            con.close()
+
+    # ----------------------------
+    # Chat History
+    # ----------------------------
+
+    def append_chat_message(
+        self,
+        run_id: str,
+        role: str,
+        content: str,
+        sql_query: Optional[str] = None,
+        data_json: Optional[str] = None,
+        provider: Optional[str] = None,
+        confidence: Optional[str] = None
+    ) -> None:
+        con = self._conn()
+        cur = con.cursor()
+        try:
+            now = datetime.utcnow().isoformat()
+            cur.execute(
+                """
+                INSERT INTO `catalog_chat_messages`
+                (run_id, role, content, sql_query, data_json, provider, confidence, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (run_id, role, content, sql_query, data_json, provider, confidence, now)
+            )
+            con.commit()
+        finally:
+            cur.close()
+            con.close()
+
+    def get_chat_history(self, run_id: str) -> List[Dict[str, Any]]:
+        con = self._conn()
+        cur = con.cursor(dictionary=True)
+        try:
+            cur.execute(
+                "SELECT * FROM `catalog_chat_messages` WHERE run_id=%s ORDER BY msg_id ASC",
+                (run_id,)
+            )
+            return cur.fetchall()
+        finally:
+            cur.close()
+            con.close()
+
+    # ----------------------------
+    # DDD Artifacts (Phase A)
+    # ----------------------------
+
+    def save_ddd_artifact(self, run_id: str, artifact_type: str, payload: Dict[str, Any]) -> None:
+        con = self._conn()
+        cur = con.cursor()
+        try:
+            now = datetime.utcnow().isoformat()
+            payload_json = json.dumps(payload)
+            cur.execute(
+                """
+                INSERT INTO `catalog_ddd_artifacts` (run_id, artifact_type, payload_json, created_at)
+                VALUES (%s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE payload_json=VALUES(payload_json), created_at=VALUES(created_at)
+                """,
+                (run_id, artifact_type, payload_json, now)
+            )
+            con.commit()
+        finally:
+            cur.close()
+            con.close()
+
+    def get_ddd_artifact(self, run_id: str, artifact_type: str) -> Optional[Dict[str, Any]]:
+        con = self._conn()
+        cur = con.cursor(dictionary=True)
+        try:
+            cur.execute(
+                "SELECT payload_json FROM `catalog_ddd_artifacts` WHERE run_id=%s AND artifact_type=%s",
+                (run_id, artifact_type)
+            )
+            row = cur.fetchone()
+            if row and row.get("payload_json"):
+                return json.loads(row["payload_json"])
+            return None
         finally:
             cur.close()
             con.close()
